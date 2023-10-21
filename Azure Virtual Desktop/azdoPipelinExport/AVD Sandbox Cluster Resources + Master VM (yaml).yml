@@ -1,0 +1,161 @@
+trigger:
+  branches:
+    include:
+    - none
+stages:
+- stage: __default
+  jobs:
+  - job: TemplateJob
+    displayName: Template Job
+    pool:
+      vmImage: windows-2019
+    steps:
+    - task: 
+      inputs:
+        repository: self
+        fetchDepth: 1
+    - task: AzurePowerShell@5
+      displayName: Get Template Variables
+      name: GetTemplateVariables
+      inputs:
+        azureSubscription: 
+        ScriptType: 'FilePath'
+        ScriptPath: 'clusterPowershellAzure/Get-TemplateVariables-Cluster.ps1'
+        ScriptArguments: '-templateParameterFile ${env:templateParameterFile}'
+        azurePowerShellVersion: 'LatestVersion'
+  - job: OnpremClusterResources
+    displayName: Onprem Cluster Resources
+    dependsOn:
+    - TemplateJob
+    variables:
+    - name: environmentType
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.environmentType'] ]
+    - name: LocationCode
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.LocationCode'] ]
+    - name: SiteCode
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.SiteCode'] ]
+    - name: AppCode
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.AppCode'] ]
+    condition: succeeded()
+    pool:
+      name: Default
+    steps:
+    - task: 
+      inputs:
+        repository: self
+        fetchDepth: 1
+    - task: PowerShell@2
+      displayName: Create Cluster AD Groups
+      name: CreateClusterADGroups
+      enabled: true
+      inputs:
+        filePath: 'clusterPowershellHybrid/Create-AD-Groups.ps1'
+        arguments: '-environmentType $(environmentType) -LocationCode $(LocationCode) -SiteCode $(SiteCode) -AppCode $(AppCode) -ouDnGroups ${env:hybridAgentouDnGroups}'
+  - job: AzureClusterResources
+    displayName: Azure Cluster Resources
+    dependsOn:
+    - TemplateJob
+    variables:
+    - name: DeploymentSubscriptionName
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.DeploymentSubscriptionName' ]]
+    - name: DeploymentSubscriptionId
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.DeploymentSubscriptionId'] ]
+    - name: LocationCode
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.LocationCode'] ]
+    - name: environmentType
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.environmentType'] ]
+    - name: dtnow
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.dtnow'] ]
+    - name: location
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.location'] ]
+    - name: adminuser
+      value: $(admUserMasterVM)
+    - name: adminpw
+      value: $(admPasswdMasterVM)
+    pool:
+      vmImage: windows-2019
+    steps:
+    - task: 
+      inputs:
+        repository: self
+        fetchDepth: 1
+    - task: AzurePowerShell@5
+      displayName: Start Bicep Cluster Resource Deployment
+      name: StartBicepClusterResourceDeployment
+      enabled: true
+      inputs:
+        azureSubscription: 'sub-devops-sandbox-SVCConnection'
+        ScriptType: 'FilePath'
+        ScriptPath: 'clusterPowershellAzure/Start-Bicep-Cluster-Resource-Deployment.ps1'
+        ScriptArguments: '-subscriptionId $(DeploymentSubscriptionId) -location $(location) -template ${env:template} -templateParameterFile ${env:templateParameterFile}'
+        azurePowerShellVersion: 'LatestVersion'
+    - task: AzureResourceManagerTemplateDeployment@3
+      displayName: Deploy Master VM via Bicep
+      name: DeployMasterVM
+      inputs:
+        deploymentScope: 'Resource Group'
+        azureResourceManagerConnection: 'sub-devops-sandbox-SVCConnection'
+        subscriptionId: $(DeploymentSubscriptionId)
+        resourceGroupName: 'rg-avd-shared-master-$(LocationCode)-$(environmentType)'
+        templateLocation: 'Linked artifact'
+        csmFile: 'clusterResources/rg-shared-master/deploy-vmMaster-CLUSTER.bicep'
+        csmParametersFile: $(templateParameterFile)
+        overrideParameters: '-localAdminAccount "$(adminuser)" -localAdminPassword "$(adminpw)"'
+        location: $(location)
+        deploymentMode: 'Incremental'
+  - job: OnpremADOperations
+    displayName: Onprem AD Operations
+    dependsOn:
+    - TemplateJob
+    - AzureClusterResources
+    - OnpremClusterResources
+    variables:
+    - name: DeploymentSubscriptionId
+      value: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.DeploymentSubscriptionId'] ]
+    - name: avdUserGroup
+      value: $[ dependencies.OnpremClusterResources.outputs['CreateClusterADGroups.avdUserGroup'] ]
+    - name: avdAdminGroup
+      value: $[ dependencies.OnpremClusterResources.outputs['CreateClusterADGroups.avdAdminGroup'] ]
+    - name: fslp_avd_cluster_Name
+      value: $[ dependencies.AzureClusterResources.outputs['StartBicepClusterResourceDeployment.fslp_avd_cluster_Name'] ]
+    - name: fslp_avd_cluster_resourceGroupName
+      value: $[ dependencies.AzureClusterResources.outputs['StartBicepClusterResourceDeployment.fslp_avd_cluster_resourceGroupName'] ]
+    - name: fslp_avd_cluster_parentStorageAccountName
+      value: $[ dependencies.AzureClusterResources.outputs['StartBicepClusterResourceDeployment.fslp_avd_cluster_parentStorageAccountName'] ]
+    condition: succeeded()
+    pool:
+      name: Default
+    steps:
+    - task: 
+      inputs:
+        repository: self
+        fetchDepth: 1
+    - task: PowerShell@2
+      displayName: Set IAM Roles - AVD Users
+      name: SetIAMRolesUsers
+      enabled: true
+      inputs:
+        filePath: 'clusterPowershellHybrid\Adjust-IAM-Roles.ps1'
+        arguments: '-SyncedADGroupName $(avdUserGroup)  -StorageRG $(fslp_avd_cluster_resourceGroupName) -storageAccountName $(fslp_avd_cluster_parentStorageAccountName) -subscriptionId $(DeploymentSubscriptionId) -appId ${env:hybridAgentAppId} -thumbprint ${env:hybridAgentThumbprint}'
+    - task: PowerShell@2
+      displayName: Set IAM Roles - AVD Admins
+      name: SetIAMRolesAdmins
+      enabled: true
+      inputs:
+        filePath: 'clusterPowershellHybrid\Adjust-IAM-Roles.ps1'
+        arguments: '-SyncedADGroupName $(avdAdminGroup)  -StorageRG $(fslp_avd_cluster_resourceGroupName) -storageAccountName $(fslp_avd_cluster_parentStorageAccountName) -subscriptionId $(DeploymentSubscriptionId) -appId ${env:hybridAgentAppId} -thumbprint ${env:hybridAgentThumbprint}'
+    - task: PowerShell@2
+      displayName: Set NTFS - AVD Users
+      name: SetNTFSUsers
+      enabled: true
+      inputs:
+        filePath: 'clusterPowershellHybrid/Set-Fileshare-Permissions.ps1'
+        arguments: '-SyncedADGroupName $(avdUserGroup)  -StorageRG $(fslp_avd_cluster_resourceGroupName) -storageAccountName $(fslp_avd_cluster_parentStorageAccountName) -fileShareName $(fslp_avd_cluster_Name) -subscriptionId $(DeploymentSubscriptionId) -appId ${env:hybridAgentAppId} -thumbprint ${env:hybridAgentThumbprint}'
+    - task: PowerShell@2
+      displayName: Set NTFS - AVD Admins
+      name: SetNTFSAdmins
+      enabled: true
+      inputs:
+        filePath: 'clusterPowershellHybrid/Set-Fileshare-Permissions.ps1'
+        arguments: '-SyncedADGroupName $(avdUserGroup)  -StorageRG $(fslp_avd_cluster_resourceGroupName) -storageAccountName $(fslp_avd_cluster_parentStorageAccountName) -fileShareName $(fslp_avd_cluster_Name) -subscriptionId $(DeploymentSubscriptionId) -appId ${env:hybridAgentAppId} -thumbprint ${env:hybridAgentThumbprint}'
+

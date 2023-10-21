@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentType": {
+      "value": "prod"
+    },
+    "location": {
+      "value": "westeurope"
+    },
+    "locationCode": {
+      "value": "weu"
+    },
+    "siteCode": {
+      "value": "de"
+    },
+    "appCode": {
+      "value": "app01"
+    },
+    "snetHostsPrefix": {
+      "value": "10.0.0.32/27"
+    },
+    "maxSessions": {
+      "value": 4
+    },
+    "timeZone": {
+      "value": "W. Europe Standard Time"
+    },
+    "tagsBilling": {
+      "value": "True"
+    },
+    "tagsBillingSite": {
+      "value": "de"
+    },
+    "tagsBillingService": {
+      "value": "AVD"
+    },
+    "deploymentDate": {
+      "value": "2023-04-05"
+    },
+    "deploymentSite": {
+      "value": "de"
+    },
+    "deploymentApp": {
+      "value": "application 01"
+    },
+    "deploymentRegion": {
+      "value": "EMEA"
+    },
+    "deploymentBy": {
+      "value": "john doe"
+    },
+    "localAdminAccount": {
+      "value": "Do_not_set"
+    },
+    "localAdminPassword": {
+      "value": "Do_not_set_will_be_overwritten_Placeholder"
+    }
+  }
+}

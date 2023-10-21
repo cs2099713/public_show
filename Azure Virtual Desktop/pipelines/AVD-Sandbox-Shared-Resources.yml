@@ -1,0 +1,97 @@
+trigger:
+- none
+
+jobs:
+- job: TemplateJob
+  displayName: TemplateJob
+  pool:
+    vmImage: windows-2019
+  steps:
+  - checkout: self
+    fetchDepth: 1
+  - task: AzurePowerShell@5
+    displayName: Get Template Variables
+    name: GetTemplateVariables
+    inputs:
+      ConnectedServiceNameARM: 
+      ScriptPath: sharedPowershellAzure/Get-TemplateVariables.ps1
+      ScriptArguments: -templateParameterFile ${env:templateParameterFile}
+      TargetAzurePs: LatestVersion
+
+- job: AzureSharedResources
+  displayName: Azure-Shared-Resources
+  dependsOn: TemplateJob
+  variables:
+    DeploymentSubscriptionName: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.DeploymentSubscriptionName' ]]
+    DeploymentSubscriptionId: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.DeploymentSubscriptionId'] ]
+    dtnow: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.dtnow'] ]
+    location: $[ dependencies.TemplateJob.outputs['GetTemplateVariables.location'] ]
+  pool:
+    vmImage: windows-2019
+  steps:
+  - checkout: self
+    fetchDepth: 1
+
+  - task: PowerShell@2
+    displayName: Get Bicep Variables
+    name: GetBicepVariables
+    enabled: true
+    inputs:
+      targetType: inline
+      script: >-
+        Write-Host "template from Deployment: "${env:template}
+        Write-Host "templateParameterFile from Deployment: "${env:templateParameterFile}
+        Write-Host "location from Deployment: "$(location)
+        Write-Host "DeploymentSubscriptionId from Deployment: "$(DeploymentSubscriptionId)
+  - task: AzurePowerShell@5
+    displayName: Start Bicep Shared Resource Deployment
+    name: StartBicepSharedResourceDeployment
+    enabled: true
+    inputs:
+      ConnectedServiceNameARM: 
+      ScriptPath: sharedPowershellAzure/Start-Bicep-Shared-Resource-Deployment.ps1
+      ScriptArguments: -subscriptionId $(DeploymentSubscriptionId) -location $(location) -template ${env:template} -templateParameterFile ${env:templateParameterFile}
+      TargetAzurePs: LatestVersion
+
+- job: OnpremSharedResources
+  displayName: Onprem-Shared-Resources
+  dependsOn:
+  - TemplateJob
+  - AzureSharedResources
+  variables:
+    tenantId: $[ dependencies.AzureSharedResources.outputs['StartBicepSharedResourceDeployment.tenantId'] ]
+    subscriptionId: $[ dependencies.AzureSharedResources.outputs['StartBicepSharedResourceDeployment.subscription_ID'] ]
+    rg_shared_storage_Name: $[ dependencies.AzureSharedResources.outputs['StartBicepSharedResourceDeployment.rg_shared_storage_Name'] ]
+    st_fslp_shared_region_Name: $[ dependencies.AzureSharedResources.outputs['StartBicepSharedResourceDeployment.st_fslp_shared_region_Name'] ]
+    rg_shared_network_Name: $[ dependencies.AzureSharedResources.outputs['StartBicepSharedResourceDeployment.rg_shared_network_Name'] ]
+    shared_network_Name: $[dependencies.AzureSharedResources.outputs['StartBicepSharedResourceDeployment.shared_network_Name']]
+  condition: succeeded()
+  pool:
+    name: Default
+  steps:
+  - checkout: self
+    fetchDepth: 1
+  - task: PowerShell@2
+    displayName: Get Deployment Output
+    name: GetDeploymentOutput
+    enabled: true
+    inputs:
+      targetType: inline
+      script: >-
+        Write-Host "tenantId from Deployment: "$(tenantId)
+        Write-Host "subscriptionId from Deployment: "$(subscriptionId)
+        Write-Host "rg_shared_storage_Name from Deployment: "$(rg_shared_storage_Name)
+        Write-Host "st_fslp_shared_region_Name from Deployment: "$(st_fslp_shared_region_Name)
+        Write-Host "rg_shared_network_Name from Deployment: "$(rg_shared_network_Name)
+        Write-Host "shared_network_Name from Deployment: "$(shared_network_Name)
+        Write-Host "hybridAgentAppId from Deployment: "${env:hybridAgentAppId}
+        Write-Host "hybridAgentDomain from Deployment: "${env:hybridAgentDomain}
+        Write-Host "hybridAgentOuDN from Deployment: "${env:hybridAgentOuDN}
+  - task: PowerShell@2
+    displayName: Join Storage Account
+    name: JoinStorageAccount
+    enabled: true
+    inputs:
+      filePath: 'sharedPowershellHybrid/Join-StorageAccount-AD.ps1'
+      arguments: '-thumbprint ${env:hybridAgentThumbprint} -appId ${env:hybridAgentAppId} -tenantId $(tenantId) -subscriptionId $(subscriptionId) -resourceGroupName $(rg_shared_storage_Name) -storageAccountName $(st_fslp_shared_region_Name) -domain ${env:hybridAgentDomain} -ouDN ${env:hybridAgentOuDN}'
+
